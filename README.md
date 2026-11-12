@@ -318,6 +318,70 @@ ssh root@192.168.1.1 "chmod +x /root/memguard.sh; (crontab -l 2>/dev/null; echo 
 (`dnsmasq_acl_default` / `dnsmasq.conf.cfg...`). На пороги CRIT/WARN
 это не влияет, только на отображаемое число — не повод для тревоги.
 
+## 10. Смена IP или параметров VPN-сервера (что делать потом)
+
+*Добавлено 2026-11-12 после смены IP сервера (5.231.205.193 → 5.231.205.132):
+на роутере в ноде был прописан старый IP и порт 2053, из-за чего VPN
+перестал работать.*
+
+В ноде `RealityServer` теперь стоит **домен** (`personal.eco-dev.ru`), а не IP,
+поэтому при смене IP сервера обычно достаточно обновить DNS.
+
+### Случай 1: сменился только IP сервера
+
+1. Поменять A-запись домена на новый IP там, где управляется DNS домена.
+2. Дождаться обновления DNS и проверить с ноутбука: `nslookup <домен>`.
+3. Перезапустить PassWall2 на роутере (он разрешает домен только при старте):
+   ```sh
+   ssh -o HostKeyAlgorithms=+ssh-rsa,ssh-ed25519 root@192.168.1.1 "/etc/init.d/passwall2 restart"
+   ```
+   Либо в вебе: `http://192.168.1.1` → Services → PassWall 2 → Save & Apply.
+4. Проверить с устройства, подключённого к роутеру:
+   ```sh
+   curl -s https://ipinfo.io/ip      # должен вернуть новый IP сервера
+   ```
+
+### Случай 2: сменилась строка `vless://…` (ключи, порт, домен)
+
+Править **только ноду** `RealityServer`, правило `rulenode` (маршрутизация:
+российские сайты напрямую, остальное через VPN) не трогать. Не заменять
+глобальную ноду на одну `RealityServer` — это сломает разделение трафика.
+
+Поля берутся из ссылки: `vless://<UUID>@<host>:<port>?…&sni=<SNI>&fp=<FP>&pbk=<PBK>&sid=<SID>`.
+
+```sh
+cp /etc/config/passwall2 /root/passwall2.bak-$(date +%Y%m%d-%H%M%S)   # копия перед правкой
+uci set passwall2.RealityServer.address="<host>"
+uci set passwall2.RealityServer.port="<port>"
+uci set passwall2.RealityServer.uuid="<UUID>"
+uci set passwall2.RealityServer.reality_publicKey="<PBK>"
+uci set passwall2.RealityServer.reality_shortId="<SID>"
+uci set passwall2.RealityServer.tls_serverName="<SNI>"
+uci set passwall2.RealityServer.fingerprint="<FP>"
+uci commit passwall2
+/etc/init.d/passwall2 restart
+```
+
+То же самое в вебе: PassWall 2 → Node List → нода `reality-server` → Edit →
+Save & Apply.
+
+### Если VPN не заработал
+
+- Сервер доступен? `timeout 6 bash -c "</dev/tcp/<host>/<port>" && echo ok`
+- DNS уже отдаёт новый IP? `nslookup <host>` (у роутера может быть кеш — перезапустить PassWall2).
+- Логи: LuCI → PassWall 2 → Log.
+- Откат: `cp /root/passwall2.bak-<дата> /etc/config/passwall2 && /etc/init.d/passwall2 restart`.
+
+### Грабли
+
+- `REMOTE HOST IDENTIFICATION HAS CHANGED` при `ssh root@192.168.1.1`: на этом
+  адресе уже были разные устройства (MikroTik, Xiaomi) — выполнить
+  `ssh-keygen -R 192.168.1.1` и подключиться заново.
+- Современный OpenSSH требует `-o HostKeyAlgorithms=+ssh-rsa,ssh-ed25519`.
+- Вход по ключу: добавить публичный ключ в `/etc/dropbear/authorized_keys`
+  на роутере. Секреты (UUID, ключи) — только в локальном
+  `CREDENTIALS.local.md`, в git не коммитить.
+
 ---
 
 ## Попытка №1 (тупик): экземпляр оказался RD03v2
